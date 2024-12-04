@@ -1,64 +1,51 @@
-'use strict';
-var gutil = require('gulp-util'),
-  path = require('path'),
-  rework = require('rework'),
-  reworkImporter = require('rework-importer'),
-  through = require('through2');
+// 获取 parent context
+const { get } = require("lodash/object");
+const { parse, eval } = require("expression-eval");
 
-// Consts
-var PLUGIN_NAME = 'gulp-import-css';
+function contextMaker(scope, path, context) {
+  if (!path) return scope;
+  const currentScope = get(context, path);
+  // xx.0 或 xx[0]
+  const top = context.top || scope;
+  const parentPath = path.replace(/\.?[^.\[]+(\.\d+|\[\d+\])?$/, "");
+  if (!parentPath) {
+    // object.value : children.0.children.0 || children[0].children[0]
+    const _scope = path.search(/\.?[^.\[]+(\.\d+|\[\d+\])$/) === -1 ? scope : currentScope;
+    return {
+      ..._scope,
+      parent: context,
+      top,
+    };
+  }
+  const parentScope = get(scope, parentPath);
+  // object.value : children.0.children.0 || children[0].children[0]
+  console.log('>>>>>1', parentPath)
+  const _scope = parentPath.search(/\.?[^.\[]+(\.\d+|\[\d+\])$/) === -1 ? scope : parentScope;
+  return contextMaker(scope, parentPath, { ..._scope, parent: context, top });
+}
 
-module.exports = function() {
-
-  return through.obj(function(file, enc, cb) {
-    if (file.isStream()) {
-      this.emit('error', new gutil.PluginError(PLUGIN_NAME, 'Streaming not supported'));
-      return cb();
-    }
-
-    try {
-      var processedCss = rework(String(file.contents), 'utf-8')
-        .use(reworkImporter({
-          path: file.path,
-          base: file.base,
-          preProcess: function(ast, options) {
-            return ast
-                .use(rework.url(function(url) {
-                    var srcDir,
-                      resourcePath,
-                      destDir;
-
-                    if (isAbsoluteUrl(url) || isRootRelativeUrl(url)) {
-                      return url;
-                    }
-
-                    // rebase relative url(...) found in CSS to be imported
-                    // @import url(...) handled by rework-importer; not passed through here
-
-                    srcDir = path.dirname(options.path);
-                    resourcePath = path.resolve(srcDir, url);
-                    destDir = path.dirname(file.path);
-
-                    return path.relative(destDir, resourcePath);
-                }));
-          }
-        }))
-        .toString();
-    } catch(err) {
-      this.emit('error', new gutil.PluginError(PLUGIN_NAME, err));
-      return cb();
-    }
-
-    file.contents = new Buffer(processedCss);
-    this.push(file);
-    cb();
-  });
+const scope = {
+  level: 1,
+  object: {
+    value: "12",
+  },
+  children: [
+    {
+      level: 2,
+      children: [
+        {
+          level: 3,
+        },
+      ],
+    },
+  ],
 };
+const ast = parse("parent.parent.level === 1 && ROLES.includes('admin')"); // abstract syntax tree (AST)
+const context = contextMaker(scope, "children.0.children.0", scope);
+console.log(JSON.stringify(context, null, "    "));
+// 内置 ROLES 角色
+context.ROLES = ["admin"];
+const value = eval(ast, context); // true
+console.log("value:", value);
 
-function isAbsoluteUrl(url) {
-  return (/^[\w]+:\/\/./).test(url);
-}
-
-function isRootRelativeUrl(url) {
-  return url.charAt(0) === '/';
-}
+console.log(JSON.stringify(contextMaker(scope, "object.value", scope), null, "    "));
